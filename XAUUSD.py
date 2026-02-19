@@ -1,27 +1,72 @@
+# ================= IMPORTS =================
+# ➕ ДОБАВЛЕНЫ: os, json, logging, datetime
+import os
+import json
+import logging
 import requests
 import pandas as pd
 import numpy as np
 import ta
+from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-TOKEN = "8515668400:AAFzSbPthjxnyeSZVjRP1622aUYf7K27vko"
-API_KEY = "26d94e78e6354315972a2659b26d4734"
-ADMIN_ID = 7849292154  # твой Telegram ID
+
+# ================= ENV =================
+# 🔁 ИЗМЕНЁН (теперь через Railway Variables)
+TOKEN = os.getenv("BOT_TOKEN")
+API_KEY = os.getenv("API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 SYMBOL = "XAU/USD"
+VIP_FILE = "vip_users.json"
 
-vip_users = set()
+
+# ================= LOGGING =================
+# ➕ ДОБАВЛЕН
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+
+# ================= VIP STORAGE =================
+# ➕ ДОБАВЛЕН (раньше VIP не сохранялись в файл)
+def load_vips():
+    if not os.path.exists(VIP_FILE):
+        return {ADMIN_ID}
+    with open(VIP_FILE, "r") as f:
+        return set(json.load(f))
+
+def save_vips(vips):
+    with open(VIP_FILE, "w") as f:
+        json.dump(list(vips), f)
+
+vip_users = load_vips()
 vip_users.add(ADMIN_ID)
+save_vips(vip_users)
+
+
+# ================= CACHE =================
+# ➕ ДОБАВЛЕН (раньше каждый раз обучалась модель)
+signal_cache = {
+    "data": None,
+    "timestamp": None
+}
+CACHE_DURATION = 4  # минут
+
 
 # ================= DATA =================
+# 🔁 ИЗМЕНЁН (добавлено логирование ошибок)
 def get_data(interval):
     url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={interval}&apikey={API_KEY}&outputsize=200"
     r = requests.get(url).json()
 
     if "values" not in r:
+        logger.error("API Error or limit reached")
         return None
 
     df = pd.DataFrame(r["values"]).astype(float)
@@ -39,6 +84,7 @@ def get_data(interval):
 
 
 # ================= AI =================
+# ✅ БЕЗ ИЗМЕНЕНИЙ (логика осталась)
 def train_ai(df):
     df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
     X = df[['rsi','ema','macd']]
@@ -49,7 +95,18 @@ def train_ai(df):
     return model
 
 
+# ================= SIGNAL =================
+# 🔁 ИЗМЕНЁН (добавлено кеширование + логирование)
 def generate_signal():
+    global signal_cache
+
+    if signal_cache["timestamp"] and \
+       datetime.now() - signal_cache["timestamp"] < timedelta(minutes=CACHE_DURATION):
+        logger.info("Using cached signal")
+        return signal_cache["data"]
+
+    logger.info("Generating new signal")
+
     tf_list = ["5min", "15min", "1h"]
     votes = []
     conf = []
@@ -57,7 +114,7 @@ def generate_signal():
     for tf in tf_list:
         df = get_data(tf)
         if df is None:
-            return "⚠ API LIMIT или ошибка данных"
+            return "⚠ API ERROR"
 
         model = train_ai(df)
         last = df[['rsi','ema','macd']].iloc[-1:]
@@ -82,7 +139,7 @@ def generate_signal():
         sl = round(price + atr*1.5,2)
         tp = round(price - atr*3,2)
 
-    return f"""
+    result = f"""
 🔥 ELITE AI GOLD SIGNAL 🔥
 
 Pair: XAUUSD
@@ -96,17 +153,22 @@ Take Profit: {tp}
 AI Confidence: {confidence}%
 """
 
+    signal_cache["data"] = result
+    signal_cache["timestamp"] = datetime.now()
+
+    return result
+
 
 # ================= TELEGRAM =================
+# ✅ Логика почти без изменений
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💎 Elite AI Gold Bot Activated")
-
+    await update.message.reply_text("💎 Elite AI Bot Active")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id not in vip_users:
-        await update.message.reply_text("🚫 VIP ACCESS ONLY")
+        await update.message.reply_text("🚫 VIP ONLY")
         return
 
     result = generate_signal()
@@ -114,14 +176,15 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ================= ADMIN CONTROL =================
+# 🔁 ИЗМЕНЁН (добавлено сохранение VIP в файл)
 async def addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
     user_id = int(context.args[0])
     vip_users.add(user_id)
-    await update.message.reply_text(f"✅ {user_id} добавлен в VIP")
-
+    save_vips(vip_users)
+    await update.message.reply_text(f"✅ {user_id} added to VIP")
 
 async def removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -129,8 +192,8 @@ async def removevip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = int(context.args[0])
     vip_users.discard(user_id)
-    await update.message.reply_text(f"❌ {user_id} удалён из VIP")
-
+    save_vips(vip_users)
+    await update.message.reply_text(f"❌ {user_id} removed from VIP")
 
 async def viplist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -140,14 +203,15 @@ async def viplist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ================= AUTO SIGNAL =================
+# ✅ Логика та же
 async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
     result = generate_signal()
-
     for user_id in vip_users:
         await context.bot.send_message(chat_id=user_id, text=result)
 
 
 # ================= RUN =================
+# 🔁 ИЗМЕНЁН (Railway-safe)
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
@@ -160,5 +224,5 @@ scheduler = AsyncIOScheduler()
 scheduler.add_job(auto_signal, "interval", minutes=5, args=[app])
 scheduler.start()
 
-print("🔥 PRO ELITE AI BOT RUNNING 🔥")
+logger.info("🚀 ELITE AI BOT STARTED")
 app.run_polling()
