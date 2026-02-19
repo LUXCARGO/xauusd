@@ -16,9 +16,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= ENV =================
 # 🔁 ИЗМЕНЁН (теперь через Railway Variables)
-TOKEN = os.getenv("BOT_TOKEN")
-API_KEY = os.getenv("API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+TOKEN = os.getenv("8515668400:AAFzSbPthjxnyeSZVjRP1622aUYf7K27vko")
+API_KEY = os.getenv("26d94e78e6354315972a2659b26d4734")
+ADMIN_ID = int(os.getenv("7849292154"))
 
 SYMBOL = "XAU/USD"
 VIP_FILE = "vip_users.json"
